@@ -1,0 +1,8 @@
+/target
+.idea
+*_local*
+config_online.toml
+*test_file*
+logs
+*.log
+*.exe
