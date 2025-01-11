@@ -5,7 +5,7 @@ use chrono::Local;
 use std::sync::Mutex;
 use tonic::metadata::MetadataValue;
 use tonic::{Code, Request, Response, Status};
-use tool::log::trace_log::tracing_subscriber;
+use tool::log::trace_log::{info, tracing_subscriber};
 use zrpc::etcd::register::ServerConf;
 use zrpc::sre_breaker::ServerSreBreaker;
 use zrpc::Server;
@@ -24,9 +24,9 @@ impl user_server::User for UserServer {
     async fn add(&self, request: Request<AddUserRequest>) -> UserResult<AddUserResponse> {
         let mut count = COUNT.lock().unwrap();
         *count = count.checked_add(1).unwrap();
-        println!("count = {:?}", *count);
+        info!("count = {:?}", *count);
         let user_request = request.into_inner();
-        println!("user_request = {:?}", user_request);
+        info!("user_request = {:?}", user_request);
         return Err(Status::invalid_argument("name is empty".to_owned()));
         if user_request.name.is_empty() {}
         let user_response = AddUserResponse { id: 1 };
@@ -35,9 +35,9 @@ impl user_server::User for UserServer {
 
     async fn get(&self, request: Request<GetUserRequest>) -> UserResult<GetUserResponse> {
         let user_request = request.into_inner();
-        println!("user_request = {:?}", user_request);
+        info!("user_request = {:?}", user_request);
         if let Some(name) = user_request.name {
-            println!("name = {}", name);
+            info!("name = {}", name);
             return Err(Status::new(Code::NotFound, "not found".to_string()));
         };
         let user_response = GetUserResponse {
@@ -79,10 +79,11 @@ async fn main() {
         .serve(|server| {
             server
                 .layer(ServerSreBreaker)
-                .add_service(user_server::UserServer::with_interceptor(
-                    UserServer::default(),
-                    check_auth,
-                ))
+                // .add_service(user_server::UserServer::with_interceptor(
+                //     UserServer::default(),
+                //     check_auth,
+                // ))
+                .add_service(user_server::UserServer::new(UserServer::default()))
         })
         .await;
 }

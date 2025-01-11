@@ -21,7 +21,7 @@ impl AsRef<EtcdConf> for EtcdConf {
 }
 
 impl EtcdConf {
-    async fn new_etcd_client(&self) -> anyhow::Result<Client> {
+    pub async fn new_etcd_client(&self) -> anyhow::Result<Client> {
         let conn_option = ConnectOptions::new().with_connect_timeout(Duration::from_secs(1));
         let endpoint: Vec<&str> = self.hosts.split(",").collect();
         let etcd_client = Client::connect(endpoint, Some(conn_option)).await?;

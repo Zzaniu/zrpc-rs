@@ -1,0 +1,5 @@
+ClientConf:
+  Model: Dev168
+  Etcd:
+    Hosts: "172.18.2.249:20000,172.18.2.249:20002,172.18.2.249:20004"
+TestServerName: test.rpc
