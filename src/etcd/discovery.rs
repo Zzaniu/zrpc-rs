@@ -1,10 +1,11 @@
 use crate::common::ServiceInstance;
 use crate::discovery::Discovery;
 use crate::etcd::EtcdConf;
-use etcd_client::{Client, EventType, GetOptions, KeyValue, WatchOptions};
+use etcd_client::{Client, EventType, GetOptions, KeyValue, WatchOptions, Watcher};
 use std::str::FromStr;
 use tokio::sync::mpsc::Sender;
 use tonic::transport::Endpoint;
+use tool::log::trace_log::{error, info};
 use tower::discover::Change;
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -29,22 +30,35 @@ impl EtcdDiscovery {
     ) {
         match event_type {
             EventType::Put => {
-                let ServiceInstance {
+                if let Ok(ServiceInstance {
                     name,
                     key,
                     endpoint,
-                } = serde_json::from_slice::<ServiceInstance>(key_value.value()).unwrap();
-                // 如果元信息的服务名不匹配，则跳过
-                if name != service_name {
-                    return;
+                }) = serde_json::from_slice::<ServiceInstance>(key_value.value())
+                {
+                    // 如果元信息的服务名不匹配，则跳过
+                    if name != service_name {
+                        return;
+                    }
+                    if let Ok(endpoint) =
+                        Endpoint::from_str(format!("http://{}", endpoint).as_str())
+                    {
+                        sender.send(Change::Insert(key, endpoint)).await.unwrap();
+                    } else {
+                        error!("invalid endpoint: {}", endpoint)
+                    }
+                } else {
+                    error!(
+                        "invalid service instance: {}",
+                        String::from_utf8_lossy(key_value.value())
+                    );
                 }
-                let endpoint = Endpoint::from_str(format!("http://{}", endpoint).as_str()).unwrap();
-                sender.send(Change::Insert(key, endpoint)).await.unwrap();
             }
-            EventType::Delete => sender
-                .send(Change::Remove(key_value.key_str().unwrap().to_string()))
-                .await
-                .unwrap(),
+            EventType::Delete => {
+                if let Ok(key) = key_value.key_str() {
+                    sender.send(Change::Remove(key.to_owned())).await.unwrap()
+                }
+            }
         }
     }
 }
@@ -57,7 +71,7 @@ impl Discovery for EtcdDiscovery {
             .etcd_client
             .get(service_name, Some(options))
             .await
-            .unwrap();
+            .expect("etcd get server failed");
         for kv in response.kvs() {
             self.load_balance(EventType::Put, kv, service_name, &sender)
                 .await;
@@ -65,23 +79,40 @@ impl Discovery for EtcdDiscovery {
     }
 
     async fn watch(&mut self, service_name: &str, sender: Sender<Change<String, Endpoint>>) {
-        let (mut watcher, mut watch_stream) = self
+        struct WatcherWrapper(Option<Watcher>);
+
+        impl Drop for WatcherWrapper {
+            fn drop(&mut self) {
+                if let Some(mut watcher) = self.0.take() {
+                    if let Ok(handler) = tokio::runtime::Handle::try_current() {
+                        handler.spawn(async move {
+                            // 取消失败了也无所谓, 反正客户端都挂了
+                            watcher.cancel().await.unwrap_or_default();
+                        });
+                    }
+                }
+            }
+        }
+
+        // 启动 watch 任务失败的话, 直接挂了就行
+        let (watcher, mut watch_stream) = self
             .etcd_client
             .watch(service_name, Some(WatchOptions::new().with_prefix()))
             .await
             .unwrap();
-        while let Some(watch_response) = watch_stream.message().await.unwrap() {
+
+        // 自动取消 watch 任务
+        let _watcher_wrapper = WatcherWrapper(Some(watcher));
+
+        while let Ok(Some(watch_response)) = watch_stream.message().await {
             for event in watch_response.events() {
-                self.load_balance(
-                    event.event_type(),
-                    event.kv().unwrap(),
-                    service_name,
-                    &sender,
-                )
-                .await;
+                if let Some(key_value) = event.kv() {
+                    self.load_balance(event.event_type(), key_value, service_name, &sender)
+                        .await;
+                }
             }
         }
-        watcher.cancel().await.unwrap();
+        info!("etcd watch server exit");
     }
 }
 

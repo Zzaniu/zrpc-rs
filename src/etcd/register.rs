@@ -92,7 +92,7 @@ impl Register for EtcdRegister {
                         return;
                     }
                     _ = tokio::time::sleep(self.interval) => {
-                        lease_keeper.keep_alive().await.map_err(|e| anyhow!("lease_keeper keep_alive error: {e}")).unwrap();
+                        lease_keeper.keep_alive().await.expect("lease_keeper keep_alive error");
                     }
                 }
             }
